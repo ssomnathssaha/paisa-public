@@ -103,6 +103,7 @@ svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .wz-step.done h3 .n{background:var(--income);color:#fff}
 .wz-step p{font-size:13.5px;color:var(--muted);line-height:1.5;margin-bottom:10px}
 .wz-step p b{color:var(--text)}
+.wz-ol{margin:0 0 12px;padding-left:20px;font-size:13.5px;color:var(--muted);line-height:1.55}.wz-ol li{margin-bottom:6px}.wz-ol b{color:var(--text)}
 .wz-act{display:flex;gap:8px;flex-wrap:wrap}
 .wz-err{color:var(--expense);font-size:13px;margin-top:8px;min-height:18px}
 .wz-note{background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.25);border-radius:14px;padding:11px 13px;font-size:13px;margin-bottom:14px;line-height:1.5}
@@ -2550,7 +2551,7 @@ function accountForm(acc, preset) {
   const f = acc ? { ...acc } : { kind: 'asset', group: 'Bank', name: '', ...(preset || {}) };
   const liveCard = () => f.kind === 'liability' && f.group === 'Credit Card' && !serverOutdated();
   const curDue = acc && isCard(acc) && !serverOutdated() ? cardDue(acc) : null;
-  const cur = acc ? (curDue !== null ? curDue : accValue(acc, curYM())) : '';
+  const cur = acc ? (curDue !== null ? curDue : accValue(acc, curYM())) : (preset && preset.cur != null ? preset.cur : '');
   openSheet(acc ? 'Edit account' : preset && preset.group === 'Credit Card' ? 'Add credit card' : 'Add account', '', body => {
     const draw = () => {
       const lc = liveCard();
@@ -2581,7 +2582,7 @@ function accountForm(acc, preset) {
         const val = parseAmt($('#acVal', body).value), lc2 = liveCard();
         let obj = acc ? D.accounts.find(a => a.id === acc.id) : null;
         if (obj) Object.assign(obj, { name, kind: f.kind, group: f.group });
-        else { obj = { id: 'ac' + uid(), name, kind: f.kind, group: f.group }; D.accounts.push(obj); }
+        else { obj = { id: 'ac' + uid(), name, kind: f.kind, group: f.group }; if (f.last4) obj.last4 = f.last4; D.accounts.push(obj); }
         if (lc2) {
           obj.limit = f.limit || 0; obj.dueDay = f.dueDay || 0;
           if (!obj.openingDate || curDue === null || val !== curDue) setCardOpening(obj, val);
@@ -2684,6 +2685,13 @@ const StPw = {
   set(k, v) { if (Demo.on) { this.mem[k] = v; return; } const a = this.all(); if (v) a[k] = v; else delete a[k]; localStorage.setItem(this.K, JSON.stringify(a)); }
 };
 const stLabel = x => x.product || x.bank || 'Card';
+const stmHasCard = x => D.accounts.some(a => isCard(a) && ((x.card && a.last4 === x.card) || a.name.trim().toLowerCase() === stLabel(x).trim().toLowerCase()));
+ACTIONS['stm-addcard'] = el => {
+  const x = Stmts.items.find(i => i.id === el.dataset.id); if (!x) return;
+  const name = (x.product || (x.bank ? x.bank + ' card' : 'Credit card'));
+  const dd = x.dueDate ? +String(x.dueDate).slice(8, 10) || 0 : 0;
+  accountForm(null, { kind: 'liability', group: 'Credit Card', name, last4: x.card || '', dueDay: dd, cur: x.amount || 0 });
+};
 function stmCard(x) {
   const k = stLabel(x), pw = StPw.get(k), c = stColor(k), open = (S.stOpen || (S.stOpen = {}))[x.id], ini = k.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
   return `<div class="stm${open ? ' open' : ''}" style="--c:${c}">
@@ -2703,6 +2711,7 @@ function stmCard(x) {
       <div class="stm-pw"><span>🔑</span><div>${x.pwHint ? esc(x.pwHint) : '<span class="faint">No password hint in this email — most banks use part of your name + date of birth or PAN.</span>'}</div></div>
       <div class="stm-pwi"><input class="inp mask" type="text" autocomplete="off" data-lpignore="true" data-1p-ignore data-pwkey="${esc(k)}" value="${esc(pw)}" placeholder="Type PDF password to save for ${esc(k)}"><button class="btn xs ghost" data-action="stm-eye" aria-label="Show">👁</button><button class="btn xs ghost" data-action="stm-copy">Copy</button></div>
       <div class="stm-act"><button class="btn primary" data-open="${esc(x.url)}">📄 Open PDF</button><button class="btn ghost" data-action="stm-edit" data-id="${esc(x.id)}">✏️ Edit</button></div>
+      ${stmHasCard(x) ? '<p class="xs muted" style="margin-top:8px">✓ This card is in your Cards list.</p>' : `<button class="btn ghost block" style="margin-top:8px" data-action="stm-addcard" data-id="${esc(x.id)}">➕ Add this card to my cards</button>`}
     </div>` : ''}
   </div>`;
 }
@@ -2722,6 +2731,22 @@ ACTIONS['stm-edit'] = el => {
       closeSheet(); render(); toast('Statement updated');
     };
     $('#seDel', body).onclick = async () => { if (!await confirmDlg('Remove statement?', 'It will be hidden from the list. The PDF stays in Drive.', 'Remove')) return; await Stmts.save(x.id, { hidden: true }); closeSheet(); render(); };
+  });
+};
+ACTIONS['stm-rename-all'] = () => {
+  const label = S.stBank, list = Stmts.items.filter(x => stLabel(x) === label); if (!list.length) return;
+  const f = (id, lb, v, ex = '') => `<div><label class="lbl">${lb}</label><input class="inp" id="${id}" value="${esc(String(v ?? ''))}" ${ex}></div>`;
+  const bank = list[0].bank || '', cardNm = list[0].product || '';
+  openSheet('Rename all “' + label + '”', `<p class="muted sm" style="margin-bottom:10px">Changes all <b>${list.length}</b> statement${list.length === 1 ? '' : 's'} at once. Leave a field as it is to keep it, or clear it to remove it.</p>
+    ${f('raProd', 'Card name', cardNm, 'placeholder="e.g. Swiggy HDFC"')}${f('raBank', 'Bank', bank)}
+    <button class="btn primary block" id="raSave" style="margin-top:12px">Update ${list.length} statement${list.length === 1 ? '' : 's'}</button>`, body => {
+    $('#raSave', body).onclick = async () => {
+      const btn = $('#raSave', body), prod = $('#raProd', body).value.trim(), bk = $('#raBank', body).value.trim();
+      if (!prod && !bk) { toast('Enter a card name or bank'); return; }
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Updating…';
+      for (const x of list) { const patch = {}; if (prod !== (x.product || '')) patch.product = prod; if (bk !== (x.bank || '')) patch.bank = bk; if (Object.keys(patch).length) await Stmts.save(x.id, patch); }
+      S.stBank = list[0] ? stLabel(list[0]) : ''; closeSheet(); render(); toast('Updated ' + list.length + ' statement' + (list.length === 1 ? '' : 's') + ' ✓');
+    };
   });
 };
 ACTIONS['stm-dedupe'] = async () => { const d = Stmts.dupes(); if (!d.length || !await confirmDlg('Hide duplicates?', d.length + ' duplicate statement' + (d.length === 1 ? '' : 's') + ' will be hidden; the best-labelled copy is kept.', 'Hide')) return; for (const x of d) await Stmts.save(x.id, { hidden: true }); render(); toast('Duplicates hidden'); };
@@ -2760,7 +2785,8 @@ function stmtHtml() {
   if (!S.stBank) return chips + dup + stmCal(all);
   const list = all.filter(x => stLabel(x) === S.stBank).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const by = {}; list.forEach(x => { const k = (x.date || '').slice(0, 7); (by[k] = by[k] || []).push(x); });
-  return chips + dup + Object.keys(by).sort().reverse().map(k => `<div class="stm-m">${esc(mLong(k))}</div>` + by[k].map(stmCard).join('')).join('');
+  const ren = `<div class="stm-dup" style="background:var(--surface-2,rgba(139,92,246,.08))"><span>${list.length} statement${list.length === 1 ? '' : 's'} under “${esc(S.stBank)}”</span><button class="btn xs primary" data-action="stm-rename-all">✏️ Rename all</button></div>`;
+  return chips + dup + ren + Object.keys(by).sort().reverse().map(k => `<div class="stm-m">${esc(mLong(k))}</div>` + by[k].map(stmCard).join('')).join('');
 }
 function renderCards(el) {
   const cs = cards(), m = curYM();
@@ -2956,18 +2982,18 @@ const Wiz = {
     }
     const done = new Set(this.doneSteps()), tpl = Setup.TEMPLATE_URL;
     const steps = [
-      ['Create your Google Sheet', `Opens a new blank Google Sheet in <b>your</b> Google account. Name it anything, e.g. “Paisa”.`, `<a class="btn primary sm" href="https://sheets.new" target="_blank" rel="noopener">Open new Sheet ↗</a>`],
-      ['Copy the Paisa script', `Tap the button, then in your Sheet open <b>Extensions → Apps Script</b>. Delete the sample code, <b>paste</b>, and press <b>Save</b> 💾.`, `<button class="btn primary sm" data-w="copy">📋 Copy script</button><a class="btn ghost sm" href="apps-script/Code.gs" target="_blank" rel="noopener">Open script</a>`],
-      ['Run the one-time setup', `Go back to the Sheet and <b>reload the page</b>. A <b>Paisa</b> menu appears. Choose <b>Paisa → ⚡ Set up everything</b>, pick your password, and allow access when Google asks.<br><span class="xs faint">Google may say “unverified app”. That is normal, it is your own script: tap <b>Advanced → Go to … (unsafe)</b>.</span>`, ''],
-      ['Publish it', `In Apps Script click <b>Deploy → New deployment</b>, tap the ⚙ gear and pick <b>Web app</b>. Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b>, then <b>Deploy</b> and <b>copy the Web app URL</b>.`, ''],
+      ['Create your Google Sheet', `<ol class="wz-ol"><li>Tap <b>Open new Sheet</b> below. A blank Google Sheet opens in a new tab (sign in to Google if asked).</li><li>Click the title at the top-left and name it <b>Paisa</b>.</li><li>Keep that tab open, then come back here.</li></ol>`, `<a class="btn primary sm" href="https://sheets.new" target="_blank" rel="noopener">Open new Sheet ↗</a>`],
+      ['Add the Paisa script to it', `<ol class="wz-ol"><li>Tap <b>Copy script</b> below. You should see “Script copied”.</li><li>Go to your Sheet tab. In the top menu click <b>Extensions → Apps Script</b>. A code editor opens.</li><li>Click inside the code box, select everything (<b>Ctrl/Cmd + A</b>) and <b>paste</b> (<b>Ctrl/Cmd + V</b>). This replaces the sample code.</li><li>Click the 💾 <b>Save</b> icon (or Ctrl/Cmd + S).</li></ol>`, `<button class="btn primary sm" data-w="copy">📋 Copy script</button><a class="btn ghost sm" href="apps-script/Code.gs" target="_blank" rel="noopener">Open script</a>`],
+      ['Set your password', `<ol class="wz-ol"><li>Go back to the Sheet tab and <b>reload the page</b> (F5 / Cmd + R). Wait a few seconds until a new <b>Paisa</b> menu appears at the top.</li><li>Click <b>Paisa → ⚡ Set up everything</b>.</li><li>Google asks for permission. Click <b>Continue</b>, choose your account, then <b>Advanced → Go to Paisa (unsafe) → Allow</b>.<br><span class="xs faint">The “unsafe” warning is normal. The script is your own copy, and only you can see your data.</span></li><li>If Google interrupted the first run, click <b>Paisa → ⚡ Set up everything</b> again. When asked, type a <b>password of at least 6 characters</b> that you will remember. You need it every time you open Paisa.</li></ol>`, ''],
+      ['Publish it as a web app', `<ol class="wz-ol"><li>In the Apps Script tab click the blue <b>Deploy</b> button (top-right) → <b>New deployment</b>.</li><li>Click the ⚙ gear next to “Select type” and choose <b>Web app</b>.</li><li>Set <b>Execute as</b> to <b>Me</b>, and <b>Who has access</b> to <b>Anyone</b>.<br><span class="xs faint">“Anyone” only means the link works. Nothing opens without your password.</span></li><li>Click <b>Deploy</b>, then <b>Copy</b> next to the <b>Web app URL</b>. It ends with <b>/exec</b>.</li></ol>`, ''],
     ];
     const n = steps.filter((_, i) => done.has(i)).length;
     el.innerHTML = `<div class="wz-top"><button class="btn ghost sm" data-w="back">← Back</button><span class="xs faint">${n} of ${steps.length} done</span></div>
-      <h1>Connect your Google Sheet</h1><p class="lead">Follow the steps. Tap ✓ after each one.</p>
+      <h1>Connect your Google Sheet</h1><p class="lead">About 5 minutes, one time only. You need a Google account and a computer or phone browser. Tap <b>Done ✓</b> after each step.</p>
       <div class="wz-bar"><i style="width:${n / steps.length * 100}%"></i></div>
       ${tpl ? `<div class="wz-note"><b>Quick way:</b> <a href="${esc(tpl)}" target="_blank" rel="noopener" style="text-decoration:underline">make a copy of the ready-made Sheet ↗</a> (script included), then skip to step 3.</div>` : ''}
       ${steps.map((s, i) => `<div class="wz-step${done.has(i) ? ' done' : ''}"><h3><span class="n">${done.has(i) ? '✓' : i + 1}</span>${s[0]}</h3><p>${s[1]}</p><div class="wz-act">${s[2]}<button class="btn ghost sm" data-w="t${i}">${done.has(i) ? 'Undo' : 'Done ✓'}</button></div></div>`).join('')}
-      <div class="wz-step"><h3><span class="n">5</span>Paste the link here</h3><p>Paste the <b>Web app URL</b> you copied. It ends with <b>/exec</b>.</p>
+      <div class="wz-step"><h3><span class="n">5</span>Paste the link here</h3><p>Paste the <b>Web app URL</b> from step 4, then tap <b>Connect</b>. Then you will be asked for the password from step 3.</p>
         <input class="inp" id="wzUrl" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(this.url)}">
         <div class="wz-err" id="wzErr"></div>
         <button class="btn primary block" data-w="connect">Connect</button></div>`;
